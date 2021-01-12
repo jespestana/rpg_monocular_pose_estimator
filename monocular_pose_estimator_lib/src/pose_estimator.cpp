@@ -27,6 +27,7 @@
  */
 
 #include "monocular_pose_estimator_lib/pose_estimator.h"
+#include "ros/ros.h"
 
 namespace monocular_pose_estimator
 {
@@ -39,6 +40,8 @@ PoseEstimator::PoseEstimator()
   valid_correspondence_threshold_ = 0.7;
 
   it_since_initialized_ = 0;
+
+  use_image_mask = false;
 }
 
 void PoseEstimator::augmentImage(cv::Mat &image)
@@ -47,11 +50,16 @@ void PoseEstimator::augmentImage(cv::Mat &image)
                                           region_of_interest_, distorted_detection_centers_);
 }
 
+void PoseEstimator::augmentImageOnlyLEDs(cv::Mat &image)
+{
+  Visualization::createVisualizationImageOnlyLEDs(image, distorted_detection_centers_);
+}
+
 void PoseEstimator::setMarkerPositions(List4DPoints positions_of_markers_on_object)
 {
   object_points_ = positions_of_markers_on_object;
   predicted_pixel_positions_.resize(object_points_.size());
-  histogram_threshold_ = Combinations::numCombinations(object_points_.size(), 3);
+  histogram_threshold_ = Combinations::numCombinations(object_points_.size(), 3); // JP: I am reassigning histogram_threshold_ later in the postFindLeds() function
 }
 
 List4DPoints PoseEstimator::getMarkerPositions()
@@ -59,11 +67,23 @@ List4DPoints PoseEstimator::getMarkerPositions()
   return object_points_;
 }
 
+void PoseEstimator::postFindLeds() {
+  n_leds_detected_ = detected_led_positions_.size();
+  n_interest_points_ = ( n_leds_detected_ < object_points_.size() ? n_leds_detected_ : object_points_.size() );  
+  // n_interest_points_ = ( n_interest_points_ > min_num_leds_detected_ ? n_interest_points_ : min_num_leds_detected_ ); // n_interest_points_==4 gives too many correspondences for the checkCorrespondences() method.
+  n_interest_points_ = ( n_interest_points_ > (min_num_leds_detected_+1) ? n_interest_points_ : (min_num_leds_detected_+1) );
+  histogram_threshold_ = Combinations::numCombinations( n_interest_points_, 3);
+  // histogram_threshold_ /= 3; // JP: I get much less correspondences, maybe my calibration is not good enough
+  // histogram_threshold_ /= 2;
+  // histogram_threshold_ = 1;
+}
+
 bool PoseEstimator::estimateBodyPose(cv::Mat image, double time_to_predict)
 {
   pose_updated_ = false;
   // Set up pixel positions list
-  List2DPoints detected_led_positions;
+  List2DPoints &detected_led_positions = detected_led_positions_;
+  detected_led_positions = List2DPoints();
 
   if (it_since_initialized_ < 1)  // If not yet initialised, search the whole image for the points
   {
@@ -76,21 +96,25 @@ bool PoseEstimator::estimateBodyPose(cv::Mat image, double time_to_predict)
                           max_blob_area_, max_width_height_distortion_, max_circular_distortion_,
                           detected_led_positions, distorted_detection_centers_, camera_matrix_K_,
                           camera_distortion_coeffs_);
+    postFindLeds();
 
     if (detected_led_positions.size() >= min_num_leds_detected_) // If found enough LEDs, Reinitialise
     {
       // Reinitialise
-//      ROS_WARN("Initialising using brute-force correspondence search.");
+      ROS_WARN("Initialising using brute-force correspondence search.");
 
       setImagePoints(detected_led_positions);
 
       if (initialise() == 1)
       {
         optimiseAndUpdatePose(time_to_predict);
+      } else {
+        ROS_WARN("Initialization failed, function initialise().");
       }
     }
     else
     { // Too few LEDs found
+      // TODO: still color detections on the image
     }
 
   }
@@ -104,6 +128,7 @@ bool PoseEstimator::estimateBodyPose(cv::Mat image, double time_to_predict)
                           max_blob_area_, max_width_height_distortion_, max_circular_distortion_,
                           detected_led_positions, distorted_detection_centers_, camera_matrix_K_,
                           camera_distortion_coeffs_);
+    postFindLeds();
 
     bool repeat_check = true;
     unsigned num_loops = 0;
@@ -122,7 +147,7 @@ bool PoseEstimator::estimateBodyPose(cv::Mat image, double time_to_predict)
         if (num_loops < 2)
         { // If haven't searched image yet, search image
 
-//          ROS_WARN("Too few LEDs detected in ROI. Searching whole image. Num LEDs detected: %d.", (int)detected_led_positions.size());
+          ROS_WARN("Too few LEDs detected in ROI. Searching whole image. Num LEDs detected: %d.", (int)detected_led_positions.size());
 
           // Search whole image
           region_of_interest_ = cv::Rect(0, 0, image.cols, image.rows);
@@ -132,15 +157,25 @@ bool PoseEstimator::estimateBodyPose(cv::Mat image, double time_to_predict)
                                 max_blob_area_, max_width_height_distortion_, max_circular_distortion_,
                                 detected_led_positions, distorted_detection_centers_, camera_matrix_K_,
                                 camera_distortion_coeffs_);
+          postFindLeds();
 
         }
         else
         { // If already searched image continue
           repeat_check = false;
-//          ROS_WARN("Too few LEDs detected. Num LEDs detected: %d.", (int)detected_led_positions.size());
+          ROS_WARN("Too few LEDs detected. Num LEDs detected: %d.", (int)detected_led_positions.size());
         }
       }
     } while (repeat_check);
+  }
+
+  // JP: print-out position of detection LEDs to the terminal
+  if (false) {
+    ROS_INFO_STREAM("detected_led_positions_.size(): " << n_leds_detected_);
+    for (unsigned i = 0; i < n_leds_detected_; ++i)
+    { 
+      ROS_INFO_STREAM("image_points["<<i<<"], x:"<<detected_led_positions_(i)(0)<<", y:"<<detected_led_positions_(i)(1));
+    }
   }
 
   return pose_updated_;
@@ -218,6 +253,59 @@ double PoseEstimator::getValidCorrespondenceThreshold()
 {
   return valid_correspondence_threshold_;
 }
+
+void PoseEstimator::setImageMask( std::string str_img_mask_filename ) {
+  use_image_mask = true;
+  img_mask_initialized = false;
+  str_img_mask = str_img_mask_filename;
+  img_mask = cv::imread(str_img_mask.c_str(), CV_LOAD_IMAGE_GRAYSCALE); // { CV_LOAD_IMAGE_GRAYSCALE, CV_LOAD_IMAGE_UNCHANGED }
+}
+
+std::string cvMatTypeToString( int inttype ) {
+    std::string r, a;
+    uchar depth = inttype & CV_MAT_DEPTH_MASK;
+    uchar chans = 1 + (inttype >> CV_CN_SHIFT);
+    switch ( depth ) {
+        case CV_8U:  r = "8U";   a = "Mat.at<uchar>(y,x)"; break;  
+        case CV_8S:  r = "8S";   a = "Mat.at<schar>(y,x)"; break;  
+        case CV_16U: r = "16U";  a = "Mat.at<ushort>(y,x)"; break; 
+        case CV_16S: r = "16S";  a = "Mat.at<short>(y,x)"; break; 
+        case CV_32S: r = "32S";  a = "Mat.at<int>(y,x)"; break; 
+        case CV_32F: r = "32F";  a = "Mat.at<float>(y,x)"; break; 
+        case CV_64F: r = "64F";  a = "Mat.at<double>(y,x)"; break; 
+        default:     r = "User"; a = "Mat.at<UKNOWN>(y,x)"; break; 
+    }   
+    r += "C";
+    r += (chans+'0');
+    //std::cout << "Mat is of type " << r << " and should be accessed with " << a << std::endl;
+    return r;
+}
+
+void PoseEstimator::applyImageMask( cv::Mat &im_in ) {
+
+  bool do_checks = true;
+  if (do_checks) {
+    bool check_size = (im_in.size() == img_mask.size());
+    bool check_type = (im_in.type() == img_mask.type());
+    bool check_type_gray = (im_in.type() == CV_8UC1);
+    std::string str_im_in_type = cvMatTypeToString(im_in.type());
+    std::cout << "[applyMask]  im_in.size(): " << im_in.size() << " of type:" << im_in.type() << " [" << str_im_in_type << "]" << std::endl;
+    printf("[applyMask] check_size:%d, check_type:%d, check_type_gray:%d\n", check_size, check_type, check_type_gray);
+  }
+
+  if (!img_mask_initialized) {
+    // create actual mask image
+    uint8_t th_alg = detection_threshold_value_;
+    uint8_t th_mask = int( th_mask - 0.75*(255-th_mask) );
+    img_mask.copyTo(img_mask_th);
+    cv::threshold( img_mask, img_mask_th, th_mask, 255, cv::THRESH_TOZERO);
+
+    img_mask_initialized = true;
+  }
+
+  cv::subtract( im_in, img_mask, im_in, img_mask_th);
+}
+
 
 void PoseEstimator::setHistogramThreshold(unsigned threshold)
 {
@@ -398,8 +486,10 @@ unsigned PoseEstimator::checkCorrespondences()
 
   // The unit image vectors from the camera out to the object points are already set when the image points are set in PoseEstimator::setImagePoints()
 
+  //ROS_INFO_STREAM("correspondences_.rows():"<<correspondences_.rows());
   if (correspondences_.rows() < 4)
   {
+    ROS_WARN("checkCorrespondences(), (correspondences_.rows() < 4).");
     return valid_correspondences;
   }
   else
@@ -701,9 +791,18 @@ unsigned PoseEstimator::initialise()
     }
   }
 
+  ROS_INFO_STREAM(
+    "initialise(), n_leds_detected_: " << n_leds_detected_ 
+    << ", n_interest_points_: " << n_interest_points_ 
+    << ", histogram_threshold_: " << histogram_threshold_ 
+    << ", hist_corr_mc:\n" << hist_corr
+  );
   if (!(hist_corr.array() == 0).all())
   {
     correspondences_ = correspondencesFromHistogram(hist_corr);
+    ROS_INFO_STREAM(
+      "checkCorrespondences():" << checkCorrespondences() 
+      << "\ncorrespondences_cm:\n" << correspondences_.transpose() );
     if (checkCorrespondences() == 1)
     {
       return 1; // Found a solution

@@ -45,16 +45,43 @@ MPENode::MPENode(const ros::NodeHandle& nh, const ros::NodeHandle& nh_private)
   cb_ = boost::bind(&MPENode::dynamicParametersCallback, this, _1, _2);
   dr_server_.setCallback(cb_);
 
+  // image_mask related
+  use_image_mask = nh_private_.param( "use_image_mask", bool(false));
+  if (use_image_mask) {
+    str_img_mask = nh_private_.param( "image_mask", std::string(""));
+    ROS_INFO_STREAM("[MPE] Using image_mask file: " << str_img_mask);
+    trackable_object_.setImageMask( str_img_mask );
+  } else {
+    str_img_mask = std::string("");
+  }
+
+  // Load configuration from launchfile
+  monocular_pose_estimator::MonocularPoseEstimatorConfig config;
+  nh_private_.getParam( "threshold_value", config.threshold_value);
+  nh_private_.getParam( "gaussian_sigma", config.gaussian_sigma);
+  nh_private_.getParam( "min_blob_area", config.min_blob_area);
+  nh_private_.getParam( "max_blob_area", config.max_blob_area);
+  nh_private_.getParam( "max_width_height_distortion", config.max_width_height_distortion);
+  nh_private_.getParam( "max_circular_distortion", config.max_circular_distortion);
+  nh_private_.getParam( "back_projection_pixel_tolerance", config.back_projection_pixel_tolerance);
+  nh_private_.getParam( "nearest_neighbour_pixel_tolerance", config.nearest_neighbour_pixel_tolerance);
+  nh_private_.getParam( "certainty_threshold", config.certainty_threshold);
+  nh_private_.getParam( "valid_correspondence_threshold", config.valid_correspondence_threshold);
+  nh_private_.getParam( "roi_border_thickness", config.roi_border_thickness);
+  dynamicParametersCallback( config, 0);
+
   // Initialize subscribers
   image_sub_ = nh_.subscribe("/camera/image_raw", 1, &MPENode::imageCallback, this);
   camera_info_sub_ = nh_.subscribe("/camera/camera_info", 1, &MPENode::cameraInfoCallback, this);
 
   // Initialize pose publisher
-  pose_pub_ = nh_.advertise<geometry_msgs::PoseWithCovarianceStamped>("estimated_pose", 1);
+  tfs_pub_ = nh_.advertise<geometry_msgs::TransformStamped>("estimated_pose", 1);
+  pose_wcov_pub_ =  nh_.advertise<geometry_msgs::PoseWithCovarianceStamped>("estimated_pose_with_cov", 1);
 
   // Initialize image publisher for visualization
   image_transport::ImageTransport image_transport(nh_);
   image_pub_ = image_transport.advertise("image_with_detections", 1);
+  image_only_leds_pub_ = image_transport.advertise("image_with_only_leds", 1);
 
   // Create the marker positions from the test points
   List4DPoints positions_of_markers_on_object;
@@ -152,6 +179,9 @@ void MPENode::imageCallback(const sensor_msgs::Image::ConstPtr& image_msg)
     return;
   }
   cv::Mat image = cv_ptr->image;
+  if (use_image_mask) {
+    trackable_object_.applyImageMask(image);
+  }
 
   // Get time at which the image was taken. This time is used to stamp the estimated pose and also calculate the position of where to search for the makers in the image
   double time_to_predict = image_msg->header.stamp.toSec();
@@ -168,6 +198,7 @@ void MPENode::imageCallback(const sensor_msgs::Image::ConstPtr& image_msg)
 
     // Convert transform to PoseWithCovarianceStamped message
     predicted_pose_.header.stamp = image_msg->header.stamp;
+    predicted_pose_.header.frame_id = image_msg->header.frame_id;
     predicted_pose_.pose.pose.position.x = transform(0, 3);
     predicted_pose_.pose.pose.position.y = transform(1, 3);
     predicted_pose_.pose.pose.position.z = transform(2, 3);
@@ -187,7 +218,29 @@ void MPENode::imageCallback(const sensor_msgs::Image::ConstPtr& image_msg)
     }
 
     // Publish the pose
-    pose_pub_.publish(predicted_pose_);
+    {
+      const geometry_msgs::Point &t = predicted_pose_.pose.pose.position;
+      const geometry_msgs::Quaternion &q = predicted_pose_.pose.pose.orientation;
+
+      const std::string child_frame_id = "target";
+      geometry_msgs::TransformStamped::Ptr p_tfs_msg( new geometry_msgs::TransformStamped() );
+      p_tfs_msg->header = predicted_pose_.header;
+      p_tfs_msg->child_frame_id = child_frame_id;
+      {
+        geometry_msgs::Vector3 &t_ = p_tfs_msg->transform.translation;
+        t_.x = t.x; t_.y = t.y; t_.z = t.z;
+      }
+      {
+        geometry_msgs::Quaternion &q_ = p_tfs_msg->transform.rotation;
+        q_.x = q.x; q_.y = q.y; q_.z = q.z; q_.w = q.w; 
+      }
+      tfs_pub_.publish(p_tfs_msg);
+
+      br_.sendTransform(tf::StampedTransform(
+        tf::Transform( tf::Quaternion( q.x, q.y, q.z, q.w), tf::Vector3(t.x, t.y, t.z)),
+        p_tfs_msg->header.stamp, p_tfs_msg->header.frame_id, child_frame_id) );
+    }
+    pose_wcov_pub_.publish(predicted_pose_);
   }
   else
   { // If pose was not updated
@@ -211,6 +264,23 @@ void MPENode::imageCallback(const sensor_msgs::Image::ConstPtr& image_msg)
     visualized_image_msg.image = visualized_image;
 
     image_pub_.publish(visualized_image_msg.toImageMsg());
+  }
+
+
+  // publish visualization image
+  if (image_only_leds_pub_.getNumSubscribers() > 0)
+  {
+    cv::Mat visualized_image = image.clone();
+    cv::cvtColor(visualized_image, visualized_image, CV_GRAY2RGB);
+    trackable_object_.augmentImageOnlyLEDs(visualized_image);
+
+    // Publish image for visualization
+    cv_bridge::CvImage visualized_image_msg;
+    visualized_image_msg.header = image_msg->header;
+    visualized_image_msg.encoding = sensor_msgs::image_encodings::BGR8;
+    visualized_image_msg.image = visualized_image;
+
+    image_only_leds_pub_.publish(visualized_image_msg.toImageMsg());
   }
 }
 

@@ -34,6 +34,9 @@
 #include <sensor_msgs/CameraInfo.h>
 #include <sensor_msgs/image_encodings.h>
 
+#include <tf/transform_broadcaster.h>
+//#include <geometry_msgs/PoseStamped.h>
+#include <geometry_msgs/TransformStamped.h>
 #include <geometry_msgs/PoseWithCovarianceStamped.h>
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
@@ -59,11 +62,18 @@ private:
   ros::NodeHandle nh_;
   ros::NodeHandle nh_private_;
 
-  image_transport::Publisher image_pub_; //!< The ROS image publisher that publishes the visualisation image
-  ros::Publisher pose_pub_; //!< The ROS publisher that publishes the estimated pose.
+  image_transport::Publisher image_pub_, image_only_leds_pub_; //!< The ROS image publisher that publishes the visualisation image
+  ros::Publisher tfs_pub_, pose_wcov_pub_; //!< The ROS publisher that publishes the estimated pose.
 
   ros::Subscriber image_sub_; //!< The ROS subscriber to the raw camera image
   ros::Subscriber camera_info_sub_; //!< The ROS subscriber to the camera info
+
+  // image_mask related
+  bool use_image_mask;
+  std::string str_img_mask;
+
+  // tf broadcaster
+  tf::TransformBroadcaster br_;
 
   dynamic_reconfigure::Server<monocular_pose_estimator::MonocularPoseEstimatorConfig> dr_server_; //!< The dynamic reconfigure server
   //dynamic_reconfigure::Server<monocular_pose_estimator::MonocularPoseEstimatorConfig>::CallbackType cb_; //!< The dynamic reconfigure callback type

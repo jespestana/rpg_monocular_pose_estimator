@@ -98,4 +98,12 @@ void Visualization::createVisualizationImage(cv::Mat &image, Eigen::Matrix4d tra
   cv::rectangle(image, region_of_interest, CV_RGB(0, 0, 255), 2);
 }
 
+void Visualization::createVisualizationImageOnlyLEDs( cv::Mat &image, std::vector<cv::Point2f> distorted_detection_centers) {
+  // Draw a circle around the detected LED
+  for (int i = 0; i < distorted_detection_centers.size(); i++)
+  {
+    cv::circle(image, distorted_detection_centers[i], 10, CV_RGB(255, 0, 0), 2);
+  } 
+}
+
 } // namespace

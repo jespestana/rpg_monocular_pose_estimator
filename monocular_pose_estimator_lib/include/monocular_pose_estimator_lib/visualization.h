@@ -66,6 +66,8 @@ public:
                                        const std::vector<double> camera_distortion_coeffs, cv::Rect region_of_interest,
                                        std::vector<cv::Point2f> distorted_detection_centers);
 
+  static void createVisualizationImageOnlyLEDs( cv::Mat &image, std::vector<cv::Point2f> distorted_detection_centers);
+
 };
 
 } // namespace

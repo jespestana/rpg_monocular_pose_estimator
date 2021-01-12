@@ -23,6 +23,7 @@
   <depend>nodelet</depend>
   <depend>sensor_msgs</depend>
   <depend>roscpp</depend>
+  <depend>tf</depend>
 
   <export>
     <nodelet plugin="${prefix}/monocular_pose_estimator_nodelet.xml"/>

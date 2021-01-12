@@ -74,11 +74,19 @@ void LEDDetector::findLeds(const cv::Mat &image, cv::Rect ROI, const int &thresh
     mc = cv::Point2f(mu.m10 / mu.m00, mu.m01 / mu.m00) + cv::Point2f(ROI.x, ROI.y);
 
     // Look for round shaped blobs of the correct size
-    if (area >= min_blob_area && area <= max_blob_area
-        && std::abs(1 - std::min((double)rect.width / (double)rect.height, (double)rect.height / (double)rect.width))
-            <= max_width_height_distortion
-        && std::abs(1 - (area / (CV_PI * std::pow(rect.width / 2, 2)))) <= max_circular_distortion
-        && std::abs(1 - (area / (CV_PI * std::pow(rect.height / 2, 2)))) <= max_circular_distortion)
+    bool c1 = area >= min_blob_area;
+    bool c2 = std::abs(1. - std::min((double)rect.width / (double)rect.height, (double)rect.height / (double)rect.width)) <= max_width_height_distortion;
+    bool c3 = std::abs(1. - (area / (CV_PI * std::pow((double)rect.width  / 2., 2.)))) <= max_circular_distortion;
+    bool c4 = std::abs(1. - (area / (CV_PI * std::pow((double)rect.height / 2., 2.)))) <= max_circular_distortion;
+    printf("[c1,c2,c3,c4]: [%d,%d,%d,%d], led area/max: %f/%f\n", c1,c2,c3,c4, area, max_blob_area);
+    // if (area >= min_blob_area && area <= max_blob_area
+    //     && std::abs(1. - std::min((double)rect.width / (double)rect.height, (double)rect.height / (double)rect.width))
+    //         <= max_width_height_distortion
+    //     && std::abs(1. - (area / (CV_PI * std::pow((double)rect.width  / 2., 2.)))) <= max_circular_distortion
+    //     && std::abs(1. - (area / (CV_PI * std::pow((double)rect.height / 2., 2.)))) <= max_circular_distortion
+    //     )
+    if (c1 && c2 && c3 && c4)
+    //if (c1)
     {
       distorted_points.push_back(mc);
       numPoints++;

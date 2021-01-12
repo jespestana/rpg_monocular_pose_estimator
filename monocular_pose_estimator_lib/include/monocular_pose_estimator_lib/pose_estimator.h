@@ -70,6 +70,17 @@ private:
   double certainty_threshold_; //!< Stores the ratio of how many of the back-projected points must be within the #back_projection_pixel_tolerance_ for a correspondence between the LEDs and the detections to be correct.
   double valid_correspondence_threshold_; //!< Stores the ratio of how many correspondences must be considered to be correct for the total correspondences to be considered correct. \see checkCorrespondences, initialise
   unsigned histogram_threshold_; //!< Stores the minimum numbers of entries in the initialisation histogram before an entry could be used to determine a correspondence between the LEDs and the image detections. \see correspondencesFromHistogram
+  
+  // ** JP **
+  unsigned n_interest_points_;
+  unsigned n_leds_detected_;
+  List2DPoints detected_led_positions_;
+  // image_mask related
+  bool use_image_mask;
+  std::string str_img_mask;
+  bool img_mask_initialized;
+  cv::Mat img_mask, img_mask_th;
+  // -- JP --
 
   std::vector<cv::Point2f> distorted_detection_centers_;
 
@@ -339,6 +350,7 @@ public:
   PoseEstimator();
 
   void augmentImage(cv::Mat &image);
+  void augmentImageOnlyLEDs(cv::Mat &image);
 
   /**
    * Sets the positions of the markers on the object.
@@ -364,7 +376,8 @@ public:
    * Estimates the pose of the tracked object
    */
   bool estimateBodyPose(cv::Mat image, double time_to_predict);
-
+  void postFindLeds();
+  
   /**
    * Sets the time at which the pose will be calculated.
    *
@@ -551,6 +564,30 @@ public:
    *
    */
   double getValidCorrespondenceThreshold();
+
+  /**
+   * Loads the image mask from file. The loaded image_mask file:
+   *     - Is used to substract (unwanted) persistent environmental IR-Light from the input images
+	 *     - The mask threshold is calculated from the threshold_value parameter of the MPE
+   *
+   * \param str_img_mask_filename {path+filename} to image_mask 
+   *
+   * \see applyImageMask
+   *
+   */
+  void setImageMask( std::string str_img_mask_filename );
+
+  /**
+   * Uses the loaded image_mask file:
+   *     - Is used to substract (unwanted) persistent environmental IR-Light from the input images
+	 *     - The mask threshold is calculated from the threshold_value parameter of the MPE
+   * 
+   * \param im input image, which is modified in-place so that it is also the output image
+   *
+   * \see setImageMask
+   * 
+   */
+  void applyImageMask( cv::Mat &im );
 
   /**
    * Sets the minimum numbers of entries in the initialisation histogram before an entry could be used to determine a correspondence between the LEDs and the image detections.
